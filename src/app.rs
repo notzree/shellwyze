@@ -1,13 +1,13 @@
 use crate::{
   action::Action,
-  components::{fps::FpsCounter, output::Home, Component},
+  components::{fps::FpsCounter, home::Home, Component},
   config::Config,
   mode::Mode,
   tui,
 };
 use color_eyre::eyre::Result;
 use crossterm::event::KeyEvent;
-use ratatui::prelude::Rect;
+use ratatui::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::mysql::MySqlPool;
 use tokio::sync::mpsc;
@@ -26,8 +26,8 @@ pub struct App {
 
 impl App {
   pub fn new(tick_rate: f64, frame_rate: f64, connection_string: String) -> Result<Self> {
-    let home = Home::new();
     let fps = FpsCounter::default();
+    let home = Home::new(connection_string.clone());
     let config = Config::new()?;
     let mode = Mode::Home;
     Ok(Self {

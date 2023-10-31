@@ -13,18 +13,18 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct Home {
+pub struct Output {
   command_tx: Option<UnboundedSender<Action>>,
   config: Config,
 }
 
-impl Home {
+impl Output {
   pub fn new() -> Self {
     Self::default()
   }
 }
 
-impl Component for Home {
+impl Component for Output {
   fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
     self.command_tx = Some(tx);
     Ok(())
@@ -37,8 +37,7 @@ impl Component for Home {
 
   fn update(&mut self, action: Action) -> Result<Option<Action>> {
     match action {
-      Action::Tick => {
-      },
+      Action::Tick => {},
       _ => {},
     }
     Ok(None)
@@ -49,4 +48,3 @@ impl Component for Home {
     Ok(())
   }
 }
-
