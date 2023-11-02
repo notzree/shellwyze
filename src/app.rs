@@ -7,11 +7,11 @@ use crate::{
 };
 use color_eyre::eyre::Result;
 use crossterm::event::KeyEvent;
+use futures::executor::block_on;
 use ratatui::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::mysql::MySqlPool;
 use tokio::sync::mpsc;
-
 pub struct App {
   pub config: Config,
   pub tick_rate: f64,
@@ -27,7 +27,8 @@ pub struct App {
 impl App {
   pub fn new(tick_rate: f64, frame_rate: f64, connection_string: String) -> Result<Self> {
     let fps = FpsCounter::default();
-    let home = Home::new(connection_string.clone());
+
+    let home = block_on(async { Home::new(connection_string.clone()).await });
     let config = Config::new()?;
     let mode = Mode::Home;
     Ok(Self {
@@ -45,12 +46,10 @@ impl App {
 
   pub async fn run(&mut self) -> Result<()> {
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
-
     let mut tui = tui::Tui::new()?.tick_rate(self.tick_rate).frame_rate(self.frame_rate);
-    // tui.mouse(true);
-    tui.enter()?;
+    //tui.mouse(true);
 
-    let conn = MySqlPool::connect(&self.connection_string).await?;
+    tui.enter()?;
 
     for component in self.components.iter_mut() {
       component.register_action_handler(action_tx.clone())?;

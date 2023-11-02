@@ -1,16 +1,22 @@
-use color_eyre::eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{prelude::*, widgets::*};
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
-use tokio::sync::mpsc::UnboundedSender;
-
 use super::{output, Component, Frame};
+use crate::config::key_event_to_string;
 use crate::{
   action::Action,
   config::{Config, KeyBindings},
 };
-
+use color_eyre::eyre::Result;
+use color_eyre::owo_colors::OwoColorize;
+use crossterm::event::{KeyCode, KeyEvent};
+use libc::exit;
+use ratatui::{prelude::*, widgets::*};
+use serde::{Deserialize, Serialize};
+use sqlx::mysql::MySqlQueryResult;
+use sqlx::*;
+use std::result;
+use std::{collections::HashMap, time::Duration};
+use tokio::sync::mpsc::UnboundedSender;
+use tui_input::{backend::crossterm::EventHandler, Input};
+extern crate exitcode;
 #[derive(Default, Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
   #[default]
@@ -18,19 +24,49 @@ pub enum Mode {
   Insert,
   Processing,
 }
-#[derive(Default)]
+
 pub struct Home {
   command_tx: Option<UnboundedSender<Action>>,
   config: Config,
-  pub text: Vec<String>,
   pub keymap: HashMap<KeyEvent, Action>,
   pub mode: Mode,
-  pub connection_string: String,
+  pub sql: Vec<String>,
+  pub sql_result: Option<MySqlQueryResult>,
+  pub input: Input,
+  pub last_events: Vec<KeyEvent>,
+  pub db: Pool<MySql>,
 }
 
 impl Home {
-  pub fn new(connection_string: String) -> Self {
-    Self { connection_string, ..Default::default() }
+  pub async fn new(connection_string: String) -> Self {
+    let db = MySqlPool::connect(&connection_string).await.expect("Failed to connect to the database");
+    let command_tx = None; // Replace with appropriate initialization
+    let config = Config::default(); // Assuming Config implements Default
+    let keymap = HashMap::new();
+    let mode = Mode::default(); // Assuming Mode implements Default
+    let sql = Vec::new();
+    let input = Input::default(); // Assuming Input implements Default
+    let last_events = Vec::new();
+    let sql_result = None;
+
+    Self { command_tx, config, keymap, mode, sql, input, last_events, db, sql_result }
+  }
+  pub fn keymap(mut self, keymap: HashMap<KeyEvent, Action>) -> Self {
+    self.keymap = keymap;
+    self
+  }
+  pub fn tick(&mut self) {
+    self.last_events.drain(..);
+  }
+  fn validate_input(&mut self, s: String) {}
+
+  pub async fn execute_query(&mut self, q: &str) -> Result<bool, sqlx::Error> {
+    let result = self.db.execute(q).await?;
+    self.sql_result = Some(result);
+    Ok(true)
+  }
+  pub fn add(&mut self, s: String) {
+    self.sql.push(s)
   }
 }
 
@@ -47,28 +83,118 @@ impl Component for Home {
 
   fn update(&mut self, action: Action) -> Result<Option<Action>> {
     match action {
-      Action::Tick => {},
-
-      _ => {},
+      Action::Tick => self.tick(),
+      Action::CompleteInput(s) => self.add(s),
+      Action::EnterNormal => {
+        self.mode = Mode::Normal;
+      },
+      Action::EnterInsert => {
+        self.mode = Mode::Insert;
+      },
+      Action::EnterProcessing => {
+        self.mode = Mode::Processing;
+      },
+      Action::ExitProcessing => {
+        // TODO: Make this go to previous mode instead
+        self.mode = Mode::Normal;
+      },
+      Action::ClearSql => {
+        self.sql.clear();
+      },
+      _ => (),
     }
     Ok(None)
   }
 
-  fn draw(&mut self, f: &mut Frame<'_>, area: Rect) -> Result<()> {
-    let layout = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints(vec![Constraint::Percentage(5), Constraint::Percentage(45), Constraint::Percentage(50)])
-      .split(area);
+  fn handle_key_events(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    self.last_events.push(key.clone());
+    let action = match self.mode {
+      Mode::Processing => return Ok(None),
+      Mode::Normal => match key.code {
+        _ => return Ok(None), //todo: Implement selecting diff messages
+      },
+      Mode::Insert => match key.code {
+        KeyCode::Esc => Action::EnterNormal,
+        KeyCode::Enter => {
+          if let Some(sender) = &self.command_tx {
+            self.execute_query("SELECT DATABSE()");
+            if let Err(e) = sender.send(Action::CompleteInput(self.input.value().to_string())) {
+              eprintln!("Failed to send action: {:?}", e);
+            }
+          }
+          self.input = "".into();
+          Action::EnterNormal
+        },
+        _ => {
+          self.input.handle_event(&crossterm::event::Event::Key(key));
+          Action::Update
+        },
+      },
+    };
+    Ok(Some(action))
+  }
 
-    let info_block = layout[0];
-    let output_block = layout[1];
-    let input_block = layout[2];
-
-    f.render_widget(Paragraph::new("output block").block(Block::default().borders(Borders::ALL)), output_block);
-    f.render_widget(Paragraph::new("input block").block(Block::default().borders(Borders::ALL)), input_block);
+  fn draw(&mut self, f: &mut Frame<'_>, rect: Rect) -> Result<()> {
+    let rects = Layout::default().constraints([Constraint::Percentage(80), Constraint::Min(12)].as_ref()).split(rect);
+    let mut text: Vec<Line> = self.sql.clone().iter().map(|l| Line::from(l.clone())).collect();
+    text.insert(0, "".into());
+    text.insert(0, "Type into input and hit enter to display here".dim().into());
+    text.insert(0, "".into());
+    text.insert(0, "".into());
+    text.insert(0, "".into());
+    text.insert(1, self.sql_result.into());
     f.render_widget(
-      Paragraph::new(self.connection_string.clone()).block(Block::default().borders(Borders::ALL)),
-      info_block,
+      Paragraph::new(text)
+        .block(
+          Block::default()
+            .title("sql sigma")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_style(match self.mode {
+              Mode::Processing => Style::default().fg(Color::Red),
+              _ => Style::default(),
+            })
+            .border_type(BorderType::Rounded),
+        )
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(Alignment::Center),
+      rects[0],
+    );
+
+    let width = rects[1].width.max(3) - 3; // keep 2 for borders and 1 for cursor
+    let scroll = self.input.visual_scroll(width as usize);
+
+    let input = Paragraph::new(self.input.value())
+      .style(match self.mode {
+        Mode::Insert => Style::default().fg(Color::Yellow),
+        _ => Style::default(),
+      })
+      .scroll((0, scroll as u16))
+      .block(Block::default().borders(Borders::ALL).title(Line::from(vec![
+        Span::raw("Enter Input Mode "),
+        Span::styled("(Press ", Style::default().fg(Color::DarkGray)),
+        Span::styled("i", Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray)),
+        Span::styled(" to start, ", Style::default().fg(Color::DarkGray)),
+        Span::styled("ESC", Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray)),
+        Span::styled(" to finish)", Style::default().fg(Color::DarkGray)),
+      ])));
+    f.render_widget(input, rects[1]);
+
+    if self.mode == Mode::Insert {
+      f.set_cursor((rects[1].x + 1 + self.input.cursor() as u16).min(rects[1].x + rects[1].width - 2), rects[1].y + 1)
+    }
+
+    f.render_widget(
+      Block::default()
+        .title(
+          ratatui::widgets::block::Title::from(format!(
+            "{:?}",
+            &self.last_events.iter().map(|k| key_event_to_string(k)).collect::<Vec<_>>()
+          ))
+          .alignment(Alignment::Right),
+        )
+        .title_style(Style::default().add_modifier(Modifier::BOLD)),
+      Rect { x: rect.x + 1, y: rect.height.saturating_sub(1), width: rect.width.saturating_sub(2), height: 1 },
     );
 
     Ok(())

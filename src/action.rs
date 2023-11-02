@@ -5,6 +5,7 @@ use serde::{
   Deserialize, Serialize,
 };
 
+//// ANCHOR: action_enum
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Action {
   Tick,
@@ -16,7 +17,15 @@ pub enum Action {
   Refresh,
   Error(String),
   Help,
+  CompleteInput(String),
+  EnterNormal,
+  EnterInsert,
+  EnterProcessing,
+  ExitProcessing,
+  Update,
+  ClearSql,
 }
+//// ANCHOR_END: action_enum
 
 impl<'de> Deserialize<'de> for Action {
   fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -44,6 +53,9 @@ impl<'de> Deserialize<'de> for Action {
           "Quit" => Ok(Action::Quit),
           "Refresh" => Ok(Action::Refresh),
           "Help" => Ok(Action::Help),
+          "EnterInsert" => Ok(Action::EnterInsert),
+          "EnterNormal" => Ok(Action::EnterNormal),
+          "ClearSql" => Ok(Action::ClearSql),
           data if data.starts_with("Error(") => {
             let error_msg = data.trim_start_matches("Error(").trim_end_matches(")");
             Ok(Action::Error(error_msg.to_string()))
