@@ -24,6 +24,6 @@ pub struct Cli {
     default_value_t = 30.0
   )]
   pub frame_rate: f64,
-  #[arg(short, long, value_name = "STRING", help = "connection string to connect to the SQL database")]
-  pub connection_string: String,
+  #[arg(short, long, value_name = "STRING", help = "initial_query", default_value_t = {"".into()})]
+  pub init_query: String,
 }

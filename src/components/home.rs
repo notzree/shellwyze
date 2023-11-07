@@ -4,19 +4,21 @@ use crate::{
   action::Action,
   config::{Config, KeyBindings},
 };
+use chatgpt::prelude::*;
+use chatgpt::types::Role::User;
 use color_eyre::eyre::Result;
 use color_eyre::owo_colors::OwoColorize;
 use crossterm::event::{KeyCode, KeyEvent};
 use libc::exit;
 use ratatui::{prelude::*, widgets::*};
 use serde::{Deserialize, Serialize};
-use sqlx::mysql::MySqlQueryResult;
-use sqlx::*;
 use std::result;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::UnboundedSender;
+use tracing_subscriber::fmt::format;
 use tui_input::{backend::crossterm::EventHandler, Input};
 extern crate exitcode;
+
 #[derive(Default, Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
   #[default]
@@ -30,26 +32,26 @@ pub struct Home {
   config: Config,
   pub keymap: HashMap<KeyEvent, Action>,
   pub mode: Mode,
-  pub sql: Vec<String>,
-  pub sql_result: Option<MySqlQueryResult>,
   pub input: Input,
+  pub conversation: Conversation,
   pub last_events: Vec<KeyEvent>,
-  pub db: Pool<MySql>,
+  pub gpt_client: ChatGPT,
 }
 
 impl Home {
-  pub async fn new(connection_string: String) -> Self {
-    let db = MySqlPool::connect(&connection_string).await.expect("Failed to connect to the database");
-    let command_tx = None; // Replace with appropriate initialization
-    let config = Config::default(); // Assuming Config implements Default
-    let keymap = HashMap::new();
-    let mode = Mode::default(); // Assuming Mode implements Default
-    let sql = Vec::new();
-    let input = Input::default(); // Assuming Input implements Default
-    let last_events = Vec::new();
-    let sql_result = None;
-
-    Self { command_tx, config, keymap, mode, sql, input, last_events, db, sql_result }
+  pub async fn new(init_query: String, gpt_api_key: String) -> Self {
+    let gpt_client = ChatGPT::new(gpt_api_key).unwrap();
+    let conversation: Conversation = gpt_client.new_conversation();
+    Self {
+      gpt_client,
+      conversation,
+      input: "".into(),
+      mode: Mode::Normal,
+      last_events: Vec::new(),
+      command_tx: Default::default(),
+      config: Config::new().unwrap(),
+      keymap: HashMap::new(),
+    }
   }
   pub fn keymap(mut self, keymap: HashMap<KeyEvent, Action>) -> Self {
     self.keymap = keymap;
@@ -58,16 +60,12 @@ impl Home {
   pub fn tick(&mut self) {
     self.last_events.drain(..);
   }
-  fn validate_input(&mut self, s: String) {}
 
-  pub async fn execute_query(&mut self, q: &str) -> Result<bool, sqlx::Error> {
-    let result = self.db.execute(q).await?;
-    self.sql_result = Some(result);
-    Ok(true)
-  }
   pub fn add(&mut self, s: String) {
-    self.sql.push(s)
+    let msg = ChatMessage { role: (User), content: (s) };
+    self.conversation.history.push(msg)
   }
+  fn send_query(&mut self, s: String) {}
 }
 
 impl Component for Home {
@@ -84,9 +82,11 @@ impl Component for Home {
   fn update(&mut self, action: Action) -> Result<Option<Action>> {
     match action {
       Action::Tick => self.tick(),
-      Action::CompleteInput(s) => self.add(s),
       Action::EnterNormal => {
         self.mode = Mode::Normal;
+      },
+      Action::SendQuery(s) => {
+        self.add(s); //append query to conversation
       },
       Action::EnterInsert => {
         self.mode = Mode::Insert;
@@ -97,9 +97,6 @@ impl Component for Home {
       Action::ExitProcessing => {
         // TODO: Make this go to previous mode instead
         self.mode = Mode::Normal;
-      },
-      Action::ClearSql => {
-        self.sql.clear();
       },
       _ => (),
     }
@@ -117,8 +114,7 @@ impl Component for Home {
         KeyCode::Esc => Action::EnterNormal,
         KeyCode::Enter => {
           if let Some(sender) = &self.command_tx {
-            self.execute_query("SELECT DATABSE()");
-            if let Err(e) = sender.send(Action::CompleteInput(self.input.value().to_string())) {
+            if let Err(e) = sender.send(Action::SendQuery(self.input.value().to_string())) {
               eprintln!("Failed to send action: {:?}", e);
             }
           }
@@ -136,18 +132,23 @@ impl Component for Home {
 
   fn draw(&mut self, f: &mut Frame<'_>, rect: Rect) -> Result<()> {
     let rects = Layout::default().constraints([Constraint::Percentage(80), Constraint::Min(12)].as_ref()).split(rect);
-    let mut text: Vec<Line> = self.sql.clone().iter().map(|l| Line::from(l.clone())).collect();
+    let mut text: Vec<Line> = self
+      .conversation
+      .history
+      .clone()
+      .iter()
+      .map(|l| Line::from(format!("{:?} : {}", l.role.clone(), l.content.clone())))
+      .collect();
     text.insert(0, "".into());
     text.insert(0, "Type into input and hit enter to display here".dim().into());
     text.insert(0, "".into());
     text.insert(0, "".into());
     text.insert(0, "".into());
-    text.insert(1, self.sql_result.into());
     f.render_widget(
       Paragraph::new(text)
         .block(
           Block::default()
-            .title("sql sigma")
+            .title("shellwyze")
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_style(match self.mode {

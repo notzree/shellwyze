@@ -10,13 +10,12 @@ use crossterm::event::KeyEvent;
 use futures::executor::block_on;
 use ratatui::prelude::*;
 use serde::{Deserialize, Serialize};
-use sqlx::mysql::MySqlPool;
 use tokio::sync::mpsc;
 pub struct App {
   pub config: Config,
   pub tick_rate: f64,
   pub frame_rate: f64,
-  pub connection_string: String,
+  pub init_query: String,
   pub components: Vec<Box<dyn Component>>,
   pub should_quit: bool,
   pub should_suspend: bool,
@@ -25,14 +24,14 @@ pub struct App {
 }
 
 impl App {
-  pub fn new(tick_rate: f64, frame_rate: f64, connection_string: String) -> Result<Self> {
+  pub fn new(tick_rate: f64, frame_rate: f64, init_query: String, gpt_api_key: String) -> Result<Self> {
     let fps = FpsCounter::default();
 
-    let home = block_on(async { Home::new(connection_string.clone()).await });
+    let home = block_on(async { Home::new(init_query.clone(), gpt_api_key).await });
     let config = Config::new()?;
     let mode = Mode::Home;
     Ok(Self {
-      connection_string,
+      init_query,
       tick_rate,
       frame_rate,
       components: vec![Box::new(home), Box::new(fps)],

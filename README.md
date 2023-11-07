@@ -1,11 +1,5 @@
-# sqlsigma
-
-rust based cli SQL client
-
-### tech
-Ratatui
-Tokio
-sqlx
+# shellwyze
+rust baesd terminal interface for AI-chatbots
 
 
 
